@@ -1,0 +1,426 @@
+---
+title: "464 Data and Methodology"
+author: "Michael Earl, Shreya Ravilla"
+format: 
+  html:
+    self-contained: true
+    code-tools: true
+    toc: true
+    toc-depth: 4
+editor: source
+execute: 
+  error: true
+  echo: true
+  message: false
+  warning: false
+---
+
+## Packages and Data
+
+```{r}
+#Packages and read data
+library(tidyverse)
+library(readxl)
+library(broom)
+library(kableExtra)
+library(estimatr)
+library(dynlm)
+library(plm)
+library(lfe)
+library(cowplot)
+library(texreg)
+
+alc<-read_excel("Panel.xlsx")
+more_drink<-read_excel("drink_more.xlsx")
+more_wage<-read_excel("wage_more.xlsx")
+```
+
+## Functions
+
+```{r}
+no_neg <- function(data) {
+  data[data < 0] <- NA
+  return(data)
+}
+
+recode_sex <- function(data) {
+  data <- recode(data, 
+                 `1` = "Male", 
+                 `2` = "Female", 
+                 `0` = NA_character_)
+  return(data)
+}
+
+recode_cs_os <- function(data) {
+  data <- recode(data,
+                 `1` = "crosssectional",
+                 `0` = "oversample")
+  return(data)
+}
+
+recode_race <- function(data) {
+  data <- recode(data, 
+                 `1` = "Black", 
+                 `2` = "Hispanic", 
+                 `3` = "Other", 
+                 `4` = "White")
+  return(data)
+}
+
+recode_region <- function(data) {
+  data <- recode(data,
+                 `1` = "Northeast",
+                 `2` = "North_Central",
+                 `3` = "South",
+                 `4` = "West",
+                 `-4` = NA_character_,
+                 `-5` = NA_character_)
+  return(data)
+}
+
+recode_region <- function(data) {
+  data <- recode(data,
+                 `1` = "Northeast",
+                 `2` = "North_Central",
+                 `3` = "South",
+                 `4` = "West",
+                 `-4` = NA_character_,
+                 `-5` = NA_character_)
+  return(data)
+}
+
+recode_urbrur <- function(data) {
+  data <- recode(data,
+                 `0` = "Rural",
+                 `1` = "Urban",
+                 `2` = NA_character_)
+  return(data)
+}
+```
+
+## Cleaning
+
+```{r}
+clean_alc <- alc |> 
+  mutate_all(no_neg) |> 
+  mutate(sex = recode_sex(sex),
+         cs_os = recode_cs_os(cs_os),
+         race = recode_race(race),
+         asvab = if_else(asvab == 0, NA, asvab/1000),
+         region = recode_region(region),
+         urbrur= recode_urbrur(urbrur),
+         year = factor(year),
+         weeks_worked = if_else(weeks_worked==0,
+                                0, weeks_worked-1))
+
+use_alc <- clean_alc |> 
+  select(id, wag_sal, drink_perday, race, sex,
+         weight, urbrur, year, asvab, industry, weeks_worked) |> 
+  na.omit()
+
+```
+
+## Pooled Regression
+
+### Model
+
+```{r}
+#linear regression with control vars
+lin_mod <-lm_robust(wag_sal ~ drink_perday + race + sex +  urbrur + year +asvab +weeks_worked,
+                    data = use_alc, se_type="HC1") 
+```
+
+### Visualization
+
+```{r}
+use_alc |> 
+  ggplot(mapping = aes(x=drink_perday,
+                       y=wag_sal)) +
+  geom_jitter(alpha = 0.1) +  
+  labs(title = "Figure 4: Annual Wage vs. Drinks Per Day",
+       subtitle = "Wage", 
+       x = "Drinks Per Day (Last 30 Days)",
+       y = NULL)+
+  geom_smooth(method = "lm", se = FALSE, color = "firebrick") +
+  guides(color = guide_legend(title = "Year"))+
+  scale_y_continuous(labels = scales::dollar_format()) +
+  theme_bw()
+```
+
+### Tables
+
+#### Regression Coefficients
+
+```{r}
+lin_mod|>
+  tidy() |> 
+  select(term:conf.high) |> 
+  mutate(p.value = if_else(p.value <0.0001, 
+                           "<0.0001", 
+                           substr(as.character(p.value), 1, 6))) |> 
+  rename(Coefficient = term,
+         Estimate = estimate,
+         `Standard Error` = std.error,
+         TStatistic = statistic,
+         PValue = p.value,
+         Lower = conf.low,
+         Upper = conf.high) |> 
+  kable(format = "html",
+        caption = "Table 1: Pooled Regression Coefficients",
+        digits = 4,
+                 full_width = F) |> 
+  kable_material("hover",
+                 font_size = 18,
+                 html_font = "Cambria Math")
+```
+
+#### Model Fit
+
+```{r}
+#table of model fit
+lin_mod |> 
+  glance()  |> 
+  select(adj.r.squared, statistic, p.value)  |>
+  mutate(p.value = if_else(p.value <0.0001, 
+                           "<0.0001", 
+                           substr(as.character(p.value), 1, 6))) |> 
+  kable(format = "html",
+               col.names = c("R-Squared Adjusted ", "F-Statisitic", "P-Value"),
+               caption =  "Table 2: Model Fit",
+                            digits = 4,
+                 full_width = F) |> 
+  kable_material("hover",
+                 font_size = 18,
+                 html_font = "Cambria Math")
+```
+
+## Stylized Facts
+
+### Quantitative Variables
+
+```{r}
+matrix_colors <- c("2011" = "steelblue", "2013" = "firebrick", "2015" = "seagreen")
+
+use_alc |> 
+  filter(drink_perday<99) |> 
+  ggplot(mapping = aes(x= drink_perday,
+                       y= wag_sal)) +
+  geom_point(alpha = .33,
+             color = "steelblue") +
+  labs(title = "Drinks Per Day vs Wage by Year",
+       y= NULL, x ="Drinks Per Day",
+       subtitle = "Wage")+
+  scale_y_continuous(labels = scales::dollar_format(), 
+                     limits = c(0, 220000)) +
+  scale_x_continuous(limits = c(0, 50)) +
+  theme_bw()+
+  facet_wrap(.~year)
+
+```
+
+```{r}
+use_alc |> 
+  select(wag_sal, drink_perday, asvab, weeks_worked) |> 
+  summary() |> 
+  kable(format = "html",
+               col.names = c("Wage", "Drinks Per Day", "ASVAB", "Weeks Worked"),
+               caption =  "Table 3: Summary Statistics of Quantitative Variables",
+                            digits = 4,
+                 full_width = F) |> 
+  kable_material("hover",
+                 font_size = 18,
+                 html_font = "Cambria Math")
+```
+
+### Categorical Variables
+
+#### Race
+
+```{r}
+race_colors <- c("White" = "steelblue", "Other" = "darkred", "Hispanic" = "seagreen", "Black" = "#DFBD69")
+
+race_plot <- use_alc |>
+  select(race, year) |>
+  ggplot(mapping = aes(y = race, fill = race)) +
+  geom_bar() +
+  labs(title = "Figure 1: Race Demographic",
+       subtitle = "Race",
+       y = "",
+       x = "Number of Observations") +
+  theme_bw() +
+  scale_fill_manual(values = race_colors) +
+  guides(fill = FALSE)
+
+race_plot
+```
+
+#### Sex
+
+```{r}
+sex_colors <- c("Male" = "steelblue", "Female" = "#FFD1DC")
+
+sex_plot <- use_alc |>
+  select(year, sex) |>
+  ggplot(mapping = aes(y = sex, fill = sex)) +
+  geom_bar() +
+  labs(title = "Figure 2: Sex Demographic",
+       subtitle = "Sex",
+       y = "",
+       x = "Number of Observations") +
+  theme_bw() +
+    scale_fill_manual(values = sex_colors) +
+  guides(fill = FALSE)
+
+sex_plot
+```
+
+#### Urban/Rural
+
+```{r}
+my_colors <- c("Urban" = "steelblue", "Rural" = "seagreen")
+
+urbrur_plot <- use_alc |>
+  select(year, urbrur) |>
+  ggplot(mapping = aes(y = urbrur, fill = urbrur)) +
+  geom_bar() +
+  labs(title = "Figure 3: Urban/Rural Demographic",
+       subtitle = "Urban/Rural",
+       y = "",
+       x = "Number of Observations") +
+  theme_bw() +
+  scale_fill_manual(values = my_colors) +
+  guides(fill = FALSE)
+
+urbrur_plot
+```
+
+## Fixed Effects Model
+
+### Models
+
+```{r}
+fix_fx <- felm(wag_sal ~ drink_perday | id + year |0 | id, data = use_alc)
+
+summary(fix_fx, robust = TRUE)
+```
+
+### Tables
+
+```{r}
+screenreg(l = list(fix_fx),
+          digits = 3,
+          custom.model.names = c("Original"),
+          custom.coef.names = NULL,
+          include.ci = F,
+          include.rsquared = FALSE, 
+          include.adjrs = TRUE, 
+          include.nobs = TRUE, 
+          include.pvalues = TRUE, 
+          include.df = FALSE, 
+          include.rmse = FALSE,
+          robust = T,
+          include.fstatistic = TRUE,
+          stars = numeric(0))
+```
+
+## Expanded Dataset
+
+```{r}
+#manipulating data to be able to add years to existing data
+long_drink <- more_drink |> 
+  pivot_longer(cols = `1997`:`2010`,
+               names_to = 'year',
+               values_to = 'drink_perday')
+
+long_wage <- more_wage |> 
+  pivot_longer(cols = `1997`:`2010`,
+               names_to = 'year',
+               values_to = 'wag_sal')
+
+wage_and_drink <- long_drink |> 
+  full_join(long_wage)
+
+use_alc_more <- alc |> 
+  select(id, year, drink_perday, wag_sal) |> 
+  rbind(wage_and_drink) |> 
+  mutate_all(no_neg) |> 
+  na.omit()
+```
+
+```{r}
+fix_fx_more <- felm(wag_sal ~ drink_perday | id + year |
+                      0 | id, data = use_alc_more)
+
+summary(fix_fx_more, robust = TRUE)
+```
+
+```{r}
+#| eval: FALSE
+use_alc_more |> 
+  filter(drink_perday<99) |> 
+  ggplot(mapping = aes(x= drink_perday,
+                       y= wag_sal)) +
+  geom_point(alpha = .33,
+             color = "steelblue") +
+  labs(title = "Drinks Per Day vs Wage by Year",
+       y= NULL, x ="Drinks Per Day",
+       subtitle = "Wage")+
+  scale_y_continuous(labels = scales::dollar_format(), 
+                     limits = c(0, 220000)) +
+  scale_x_continuous(limits = c(0, 50)) +
+  theme_bw()+
+  facet_wrap(.~year)
+
+```
+
+```{r}
+year_plot <- use_alc_more |> 
+  ggplot(mapping = aes(y = year)) +
+  geom_bar(fill = "steelblue") +
+  labs(title = "Figure 6: Number of Observations per Year",
+       subtitle = "Year",
+       y = NULL,
+       x = "Number of Observations") +
+  theme_bw() +
+  guides(fill = FALSE)
+
+year_plot
+```
+
+```{r}
+screenreg(l = list(fix_fx_more),
+          digits = 3,
+          custom.model.names = c("Expanded"),
+          custom.coef.names = NULL,
+          include.ci = F,
+          include.rsquared = FALSE, 
+          include.adjrs = TRUE, 
+          include.nobs = TRUE, 
+          include.pvalues = TRUE, 
+          include.df = FALSE, 
+          include.rmse = FALSE,
+          robust = T,
+          include.fstatistic = TRUE,
+          stars = numeric(0))
+```
+
+#### Side-By-Side
+
+```{r}
+screenreg(l = list(fix_fx, fix_fx_more),
+          digits = 3,
+          #caption = 'title',
+          custom.model.names = c("Original", "Expanded "),
+          custom.coef.names = NULL, 
+          stars = numeric(0),
+          include.ci = F,
+          include.rsquared = FALSE, 
+          include.adjrs = TRUE, 
+          include.nobs = TRUE, 
+          include.pvalues = FALSE, 
+          include.df = FALSE, 
+          include.rmse = FALSE,
+          robust = T, # robust standard error
+          #custom.header = list("drink_perday" = 1:2),
+          custom.note = '`Original` contains data from years 2011, 2013, and 2015, \n while `Expanded` contains data from 1997 through 2015')
+```
